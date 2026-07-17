@@ -107,6 +107,10 @@ function renderMarkdown(text) {
   return marked(text)
 }
 
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms))
+}
+
 async function scrollBottom() {
   await nextTick()
   const anchor = document.querySelector('.chat-main .message-area')
@@ -175,17 +179,29 @@ async function sendMessage() {
   if (!q || streaming.value) return
   input.value = ''
 
-  if (!currentSessionId.value) await newSession()
-  const sid = currentSessionId.value
-
-  // Add user message
-  messages.value.push({ role: 'user', content: q })
-  scrollBottom()
-
   streaming.value = true
   streamText.value = ''
 
   try {
+    // If no session yet, or the current session no longer exists in DB, create a new one
+    if (!currentSessionId.value) {
+      await newSession()
+    } else {
+      // Verify the session still exists before using it
+      try {
+        await api.get(`/chat/session/${currentSessionId.value}/messages`)
+      } catch (e) {
+        // Session not found (e.g. DB was rebuilt) — create a fresh one
+        console.warn('Session gone, creating new one:', e)
+        await newSession()
+      }
+    }
+    const sid = currentSessionId.value
+
+    // Add user message (must be after session check — newSession() clears messages[])
+    messages.value.push({ role: 'user', content: q })
+    scrollBottom()
+
     // Get the fetch-based SSE stream
     const token = localStorage.getItem('accessToken')
     const resp = await fetch(`/api/chat/send`, {
@@ -201,22 +217,67 @@ async function sendMessage() {
     const decoder = new TextDecoder()
     let fullText = ''
 
-    while (true) {
-      const { done, value } = await reader.read()
-      if (done) break
-      const chunk = decoder.decode(value, { stream: true })
-      // SSE data lines
-      const lines = chunk.split('\n').filter(l => l.startsWith('data:'))
-      for (const line of lines) {
-        const data = line.replace('data:', '').trim()
-        if (data) {
-          fullText += data
-          streamText.value = fullText
+    // 打字机效果：接收侧把字符压入队列，渲染侧按固定间隔逐字弹出
+    const charQueue = []
+    let receiveDone = false
+
+    // 独立的渲染循环：从队列逐字取出显示，形成一个字一个字弹出的视觉效果
+    const typer = (async () => {
+      while (!receiveDone || charQueue.length > 0) {
+        if (charQueue.length > 0) {
+          // 自适应速度：队列越长每次弹出越多，避免打字进度严重落后于生成
+          const step = Math.max(1, Math.floor(charQueue.length / 20))
+          streamText.value += charQueue.splice(0, step).join('')
           await nextTick()
           scrollBottom()
+          await sleep(18)
+        } else {
+          await sleep(10)
         }
       }
+    })()
+
+    // 接收循环：用 sseBuffer 跨 chunk 缓冲，按 SSE 事件行边界解析，保留 token 内的空格
+    let sseBuffer = ''
+    const IDLE_TIMEOUT = 2500 // 2.5s 无新数据视为结束（正常 token 间隔为毫秒级，兼作 [DONE] 丢失时的兑底）
+    // 解析单行 SSE data：返回 true 表示遇到结束标记，应停止接收
+    const handleLine = (line) => {
+      if (!line.startsWith('data:')) return false
+      const data = line.slice(5) // 不用 trim，保留 token 原始空格
+      if (!data) return false
+      if (data === '[DONE]') return true // 后端显式结束标记
+      fullText += data
+      for (const ch of data) charQueue.push(ch)
+      return false
     }
+    try {
+      let ended = false
+      while (!ended) {
+        const result = await Promise.race([
+          reader.read(),
+          sleep(IDLE_TIMEOUT).then(() => ({ idleTimeout: true })),
+        ])
+        if (result.idleTimeout) {
+          try { await reader.cancel() } catch (_) { /* ignore */ }
+          break
+        }
+        const { done, value } = result
+        if (done) break
+        sseBuffer += decoder.decode(value, { stream: true })
+        const lines = sseBuffer.split('\n')
+        // 最后一行可能不完整，留到下次拼接
+        sseBuffer = lines.pop() ?? ''
+        for (const line of lines) {
+          if (handleLine(line)) { ended = true; break }
+        }
+      }
+      // 处理缓冲区残留的最后一行
+      if (!ended) handleLine(sseBuffer)
+    } finally {
+      // 无论正常结束、[DONE]、超时还是异常，都确保打字机能退出
+      receiveDone = true
+    }
+    await typer // 等打字机把队列播放完
 
     // Done: add assistant message
     messages.value.push({ role: 'assistant', content: fullText, sources: [] })

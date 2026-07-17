@@ -34,5 +34,8 @@ backend/data/
 .env.local
 *.local
 
+# ===== Qoder IDE (conversation history, cache, skills) =====
+.qoder/
+
 # ===== Docker volumes (if mapped locally) =====
 volumes/

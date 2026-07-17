@@ -23,6 +23,13 @@ import reactor.core.publisher.Flux;
 import java.util.ArrayList;
 import java.util.List;
 
+/**
+ * 智能问答控制器。
+ *
+ * <p>提供会话管理（创建/列表/删除/收藏/消息查询）和 SSE 流式问答接口。
+ * 问答接口（{@code POST /send}）集成了 Redis 滑动窗口限流，
+ * 超出配额抛出 {@link com.pol.rag.common.api.ResultCode#RATE_LIMITED}。</p>
+ */
 @Tag(name = "智能问答")
 @RestController
 @RequestMapping("/api/chat")
@@ -66,11 +73,17 @@ public class ChatController {
     @Operation(summary = "获取会话消息")
     @GetMapping("/session/{id}/messages")
     public Result<List<ChatMessage>> getMessages(@PathVariable Long id) {
-        return Result.success(chatService.getMessages(id));
+        return Result.success(chatService.getMessages(id, SecurityUtil.getCurrentUserId()));
     }
 
     // ────────── SSE Streaming Chat ──────────
 
+    /**
+     * SSE 流式问答（核心端点）。
+     *
+     * <p>先校验限流配额，再调用 {@link ChatService#chatStream} 流式生成回答。
+     * 返回 {@code Content-Type: text/event-stream}，前端通过 EventSource 或 fetch reader 接收。</p>
+     */
     @Operation(summary = "发送问题(SSE流式)")
     @PostMapping(value = "/send", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public Flux<String> send(@Valid @RequestBody ChatRequest request, HttpServletRequest httpReq) {

@@ -24,6 +24,15 @@ import java.nio.file.Paths;
 import java.util.List;
 import java.util.UUID;
 
+/**
+ * 知识库管理控制器（管理员权限）。
+ *
+ * <p>提供文档上传/列表/删除/重新处理、分类管理、标签管理等 REST 接口。
+ * 全部接口受 RBAC 保护（{@code ADMIN} 角色）。</p>
+ *
+ * <p>文档上传流程：接收文件 → 保存至本地绝对路径 → 写入 kb_document 表（状态 PARSING）
+ * → 异步触发 {@link DocumentIngestionService#ingestAsync} 完成解析、分块、向量化。</p>
+ */
 @Tag(name = "知识库管理(管理员)")
 @RestController
 @RequestMapping("/api/kb")
@@ -40,6 +49,11 @@ public class KnowledgeBaseController {
 
     // ────────── Document management ──────────
 
+    /**
+     * 上传文档：保存到本地存储 → 插入 kb_document（状态 PARSING）→ 触发异步摄取。
+     *
+     * <p>存储路径使用绝对路径解析，避免 Tomcat 临时工作目录漂移导致文件丢失。</p>
+     */
     @Operation(summary = "上传文档")
     @PostMapping("/document/upload")
     public Result<Void> upload(@RequestParam("file") MultipartFile file,
@@ -58,7 +72,9 @@ public class KnowledgeBaseController {
         }
 
         String fileName = file.getOriginalFilename();
-        String storedName = UUID.randomUUID() + "_" + (fileName != null ? fileName : "unknown");
+        // Strip path components to prevent directory traversal (e.g. "../../etc/passwd" → "passwd")
+        String safeName = fileName != null ? Paths.get(fileName).getFileName().toString() : "unknown";
+        String storedName = UUID.randomUUID() + "_" + safeName;
         Path destPath = storageRoot.resolve(storedName);
         try {
             file.transferTo(destPath.toFile());
@@ -88,6 +104,9 @@ public class KnowledgeBaseController {
         return Result.success();
     }
 
+    /**
+     * 查询文档列表，支持按标题模糊搜索和分页。
+     */
     @Operation(summary = "文档列表")
     @GetMapping("/document/list")
     public Result<PageResult<KbDocument>> listDocs(
@@ -103,6 +122,12 @@ public class KnowledgeBaseController {
         return Result.success(PageResult.of(p));
     }
 
+    /**
+     * 删除文档：清理磁盘文件（忽略异常）、删除关联 MySQL 分块记录。
+     *
+     * <p><b>注意：</b>当前实现不删除 Milvus 中的向量数据（保持问答可追溯），
+     * 这是有意为之的简化设计，而非 bug。</p>
+     */
     @Operation(summary = "删除文档")
     @DeleteMapping("/document/{id}")
     public Result<Void> deleteDoc(@PathVariable Long id) {

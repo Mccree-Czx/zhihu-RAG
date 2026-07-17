@@ -99,7 +99,7 @@ mybatis-plus:
 # Application custom settings
 app:
   jwt:
-    secret: ${JWT_SECRET:ZmFrZS1zZWNyZXQta2V5LWZvci1yYWcta2ItZGVtby1jaGFuZ2UtaW4tcHJvZA==}
+    secret: ${JWT_SECRET:change-me-base64-256bit-secret-key}
     access-token-expire-minutes: 120
     refresh-token-expire-days: 7
     issuer: rag-kb

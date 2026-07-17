@@ -19,6 +19,7 @@ cd backend
 # Inject API keys & ports (override via your shell env if desired)
 export DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-sk-placeholder}
 export DASHSCOPE_API_KEY=${DASHSCOPE_API_KEY:-sk-placeholder}
+export JWT_SECRET=${JWT_SECRET:-change-me-base64-256bit-secret-key}
 export REDIS_PORT=${REDIS_PORT:-6380}
 export SERVER_PORT=${SERVER_PORT:-8081}
 mvn spring-boot:run -Dspring-boot.run.jvmArguments="-Xms512m -Xmx1g" &

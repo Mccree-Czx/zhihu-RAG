@@ -22,6 +22,22 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
+/**
+ * 文档摄取管道：解析 → 分块 → 向量嵌入 → 写入 Milvus + 持久化元数据。
+ *
+ * <p>摄取流程（{@link #ingestAsync} 异步触发）：</p>
+ * <ol>
+ *   <li>{@link TikaDocumentReader} 解析文档全文</li>
+ *   <li>{@link TokenTextSplitter} 按 chunkSize 切分为片段</li>
+ *   <li>为每个片段构建 Milvus Document（含 metadata）</li>
+ *   <li>通过 {@link VectorStore#add} 写入 Milvus 向量库（每批最多 10 条，
+ *       避免 DashScope text-embedding-v3 的 batch size 限制）</li>
+ *   <li>片段元数据持久化到 MySQL（kb_chunk 表）</li>
+ *   <li>更新 kb_document 状态为 INDEXED</li>
+ * </ol>
+ *
+ * <p>失败处理：任何环节异常均将文档状态设为 FAILED 并记录错误信息。</p>
+ */
 @Slf4j
 @Service
 @RequiredArgsConstructor
@@ -35,12 +51,27 @@ public class DocumentIngestionService {
     private static final List<String> SUPPORTED_EXTENSIONS = List.of(
             "pdf", "docx", "doc", "txt", "md", "markdown", "csv", "json", "xml", "html", "htm");
 
+    /**
+     * 判断文件扩展名是否为支持的格式。
+     *
+     * @param fileName 文件名（如 {@code report.pdf}）
+     * @return {@code true} 如果扩展名在 {@link #SUPPORTED_EXTENSIONS} 中
+     */
     public boolean isSupported(String fileName) {
         if (fileName == null || !fileName.contains(".")) return false;
         String ext = fileName.substring(fileName.lastIndexOf('.') + 1).toLowerCase();
         return SUPPORTED_EXTENSIONS.contains(ext);
     }
 
+    /**
+     * 异步触发文档摄取（由 {@link KnowledgeBaseController#upload} 调用）。
+     *
+     * <p>运行在 {@link AsyncConfig#DOC_EXECUTOR} 线程池上。
+     * 成功后更新文档状态为 INDEXED，失败则设为 FAILED。</p>
+     *
+     * @param documentId 文档 ID
+     * @param filePath   文档在磁盘上的绝对路径
+     */
     @Async(AsyncConfig.DOC_EXECUTOR)
     public void ingestAsync(Long documentId, String filePath) {
         try {
@@ -55,6 +86,13 @@ public class DocumentIngestionService {
         }
     }
 
+    /**
+     * 完整摄取管道（同步执行），由 {@link #ingestAsync} 异步调用。
+     *
+     * @param documentId 文档 ID
+     * @param filePath   文档在磁盘上的绝对路径
+     * @throws BusinessException 文档内容为空时抛出（{@link ResultCode#DOC_PARSE_FAILED}）
+     */
     private void ingest(Long documentId, String filePath) {
         log.info("Starting ingestion for docId={}, path={}", documentId, filePath);
 
@@ -129,6 +167,15 @@ public class DocumentIngestionService {
         log.info("Ingestion complete for docId={}, chunks={}", documentId, chunkEntities.size());
     }
 
+    /**
+     * 估算文本的 token 数量。
+     *
+     * <p>中文按 1.3 token/字、其他按 0.75 token/字估算，
+     * 经验值对标 DeepSeek tokenizer 的中英文编码效率差异。</p>
+     *
+     * @param text 待估算的文本
+     * @return 估算 token 数
+     */
     private int estimateTokens(String text) {
         if (text == null) return 0;
         int chineseChars = 0, otherChars = 0;

@@ -50,6 +50,13 @@ public class AuthService {
     private static final String REFRESH_TOKEN_PREFIX = "refresh:";
     private static final String TOKEN_BLACKLIST_PREFIX = "blacklist:";
 
+    /**
+     * 用户登录：认证凭证 → 颁发双令牌（access + refresh）。
+     *
+     * @param request 含 username 和 password 的登录请求
+     * @return 包含 accessToken、refreshToken、过期时间、用户信息的响应
+     * @throws BusinessException 密码错误（{@link ResultCode#PASSWORD_ERROR}）或账户禁用（{@link ResultCode#ACCOUNT_DISABLED}）
+     */
     @Transactional
     public TokenResponse login(LoginRequest request) {
         // Authenticate
@@ -88,6 +95,16 @@ public class AuthService {
                 appProperties.getJwt().getAccessTokenExpireMinutes() * 60, userInfo);
     }
 
+    /**
+     * 刷新令牌：校验旧 refresh token → 撤销旧令牌 → 颁发新令牌对。
+     *
+     * <p>校验步骤：① 解析 JWT 并提取 uid；② 查 Redis 确认 token 未被撤销；
+     * ③ 查 MySQL 确认用户仍存在且启用。</p>
+     *
+     * @param refreshToken 旧的 refresh token
+     * @return 新颁发的令牌对
+     * @throws BusinessException token 无效（{@link ResultCode#TOKEN_INVALID}）或账户禁用（{@link ResultCode#ACCOUNT_DISABLED}）
+     */
     @Transactional
     public TokenResponse refresh(String refreshToken) {
         Long uid = jwtTokenProvider.parseClaims(refreshToken).get("uid", Long.class);
@@ -118,6 +135,13 @@ public class AuthService {
                 appProperties.getJwt().getAccessTokenExpireMinutes() * 60, userInfo);
     }
 
+    /**
+     * 登出：将 access token 加入 Redis 黑名单（设置过期时间为 token 剩余有效期），
+     * 并从 Redis 中删除 refresh token。
+     *
+     * @param accessToken  需加入黑名单的 access token（可为 null）
+     * @param refreshToken 需删除的 refresh token（可为 null）
+     */
     public void logout(String accessToken, String refreshToken) {
         if (accessToken != null) {
             long expireMs = jwtTokenProvider.parseClaims(accessToken).getExpiration().getTime() - System.currentTimeMillis();
@@ -132,6 +156,12 @@ public class AuthService {
         }
     }
 
+    /**
+     * 注册新用户：校验用户名唯一性 → BCrypt 加密密码 → 插入用户 → 分配 USER 角色。
+     *
+     * @param request 注册请求（username、password、可选 nickname 和 email）
+     * @throws BusinessException 用户名已存在（{@link ResultCode#USERNAME_EXISTS}）
+     */
     @Transactional
     public void register(RegisterRequest request) {
         // Check username uniqueness
@@ -161,6 +191,12 @@ public class AuthService {
         }
     }
 
+    /**
+     * 修改当前登录用户的密码（需验证旧密码）。
+     *
+     * @param request 含 oldPassword 和 newPassword
+     * @throws BusinessException 用户不存在（{@link ResultCode#USER_NOT_FOUND}）或旧密码错误（{@link ResultCode#OLD_PASSWORD_ERROR}）
+     */
     @Transactional
     public void changePassword(ChangePasswordRequest request) {
         Long uid = SecurityUtil.getCurrentUserId();

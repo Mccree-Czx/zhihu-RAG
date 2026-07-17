@@ -20,7 +20,12 @@ import java.util.List;
 import java.util.stream.Collectors;
 
 /**
- * Extracts JWT from the Authorization header and sets the security context.
+ * JWT 认证过滤器：从 Authorization 请求头提取 Bearer token，
+ * 解析后设置 Spring Security 上下文。
+ *
+ * <p>继承 {@link OncePerRequestFilter}，保证每个请求仅执行一次。
+ * token 缺失或解析失败时静默放行（交给后续过滤器链或 Controller 层处理异常）。
+ * 过期 token 不抛异常，仅记日志。</p>
  */
 @Slf4j
 @Component
@@ -29,6 +34,9 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
     private final JwtTokenProvider jwtTokenProvider;
 
+    /**
+     * 核心过滤逻辑：解析 JWT → 提取 uid/username/roles → 构建认证令牌 → 设置安全上下文。
+     */
     @Override
     @SuppressWarnings("unchecked")
     protected void doFilterInternal(HttpServletRequest request,
@@ -62,6 +70,12 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         filterChain.doFilter(request, response);
     }
 
+    /**
+     * 从请求头中解析 Bearer token。
+     *
+     * @param request HTTP 请求
+     * @return token 字符串，或 {@code null} 当 head 缺失或格式不正确
+     */
     private String resolveToken(HttpServletRequest request) {
         String bearer = request.getHeader("Authorization");
         if (StringUtils.hasText(bearer) && bearer.startsWith("Bearer ")) {
