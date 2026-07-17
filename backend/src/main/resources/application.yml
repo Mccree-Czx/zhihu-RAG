@@ -1,0 +1,135 @@
+server:
+  port: ${SERVER_PORT:8081}
+  tomcat:
+    threads:
+      max: 400
+      min-spare: 20
+    accept-count: 200
+    max-connections: 10000
+
+spring:
+  application:
+    name: rag-knowledge-base
+  # Enable virtual threads (Java 21) for high concurrency
+  threads:
+    virtual:
+      enabled: true
+
+  servlet:
+    multipart:
+      max-file-size: 50MB
+      max-request-size: 60MB
+
+  datasource:
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    url: jdbc:mysql://${MYSQL_HOST:localhost}:${MYSQL_PORT:3306}/${MYSQL_DB:rag_kb}?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true
+    username: ${MYSQL_USER:root}
+    password: ${MYSQL_PASSWORD:root123456}
+    hikari:
+      pool-name: RagHikariPool
+      minimum-idle: 10
+      maximum-pool-size: 50
+      idle-timeout: 600000
+      max-lifetime: 1800000
+      connection-timeout: 30000
+      connection-test-query: SELECT 1
+
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6380}
+      database: 0
+      timeout: 5000ms
+      lettuce:
+        pool:
+          max-active: 50
+          max-idle: 20
+          min-idle: 5
+          max-wait: 3000ms
+
+  flyway:
+    enabled: true
+    baseline-on-migrate: true
+    locations: classpath:db/migration
+    encoding: UTF-8
+
+  ai:
+    openai:
+      # Global fallback api-key (overridden per capability below)
+      api-key: ${DEEPSEEK_API_KEY:sk-placeholder}
+      chat:
+        # DeepSeek is OpenAI-compatible
+        base-url: ${DEEPSEEK_BASE_URL:https://api.deepseek.com}
+        api-key: ${DEEPSEEK_API_KEY:sk-placeholder}
+        options:
+          model: ${DEEPSEEK_MODEL:deepseek-chat}
+          temperature: 0.3
+      embedding:
+        # Aliyun DashScope (Bailian) OpenAI-compatible endpoint
+        base-url: ${DASHSCOPE_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode}
+        api-key: ${DASHSCOPE_API_KEY:sk-placeholder}
+        options:
+          model: ${EMBEDDING_MODEL:text-embedding-v3}
+          dimensions: 1024
+    vectorstore:
+      milvus:
+        client:
+          host: ${MILVUS_HOST:localhost}
+          port: ${MILVUS_PORT:19530}
+        databaseName: default
+        collectionName: kb_chunk_vector
+        embeddingDimension: 1024
+        indexType: HNSW
+        metricType: COSINE
+        indexParameters: '{"M":16,"efConstruction":64}'
+        initialize-schema: true
+
+mybatis-plus:
+  configuration:
+    map-underscore-to-camel-case: true
+    log-impl: org.apache.ibatis.logging.slf4j.Slf4jImpl
+  global-config:
+    db-config:
+      logic-delete-field: deleted
+      logic-delete-value: 1
+      logic-not-delete-value: 0
+      id-type: assign_id
+  mapper-locations: classpath*:mapper/**/*.xml
+
+# Application custom settings
+app:
+  jwt:
+    secret: ${JWT_SECRET:ZmFrZS1zZWNyZXQta2V5LWZvci1yYWcta2ItZGVtby1jaGFuZ2UtaW4tcHJvZA==}
+    access-token-expire-minutes: 120
+    refresh-token-expire-days: 7
+    issuer: rag-kb
+  storage:
+    # Local file storage root for uploaded documents
+    root-path: ${STORAGE_ROOT:./data/uploads}  # 代码中会转为绝对路径
+  rag:
+    top-k: 5
+    similarity-threshold: 0.35
+    max-history-rounds: 6
+    chunk-size: 500
+    chunk-overlap: 80
+  rate-limit:
+    chat-capacity: 30
+    chat-refill-minutes: 1
+
+# API docs
+knife4j:
+  enable: true
+  setting:
+    language: zh_cn
+
+springdoc:
+  swagger-ui:
+    path: /swagger-ui.html
+  api-docs:
+    path: /v3/api-docs
+
+logging:
+  level:
+    root: INFO
+    com.pol.rag: DEBUG
+    org.springframework.ai: INFO
